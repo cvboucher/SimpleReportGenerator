@@ -1,6 +1,6 @@
 # SimpleReportGenerator
 
-Minimal Blazor report table component with optional grouping and Excel export.
+Minimal Blazor report table component with optional grouping.
 
 ## Install
 
@@ -65,16 +65,6 @@ dotnet add package SimpleReportGenerator
     </GroupFooter>
 </ReportGenerator>
 ```
-
-## Excel export
-
-`ReportGenerator` includes `ExportToXlsx()` which uses JS interop to download the file. Add the script in your host app:
-
-```html
-<script src="_content/SimpleReportGenerator/reportGenerator.js"></script>
-```
-
-Then call `await report.ExportToXlsx()` from your page with a `@ref`.
 
 ## Props
 

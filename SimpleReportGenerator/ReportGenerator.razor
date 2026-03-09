@@ -1,9 +1,5 @@
 @typeparam TItem
 @using System.Reflection
-@using System.IO
-@using Microsoft.JSInterop
-@using NPOI.SS.UserModel
-@using NPOI.XSSF.UserModel
 
 <div class="table-responsive" id="report-content">
     <table class="@TableClass">
@@ -76,8 +72,6 @@
     [Parameter] public Action<TItem>? GroupReset { get; set; }
     [Parameter] public Dictionary<int, Func<TItem, TItem, bool>>? GroupBreaks { get; set; }
     [Parameter] public string ReportName { get; set; } = "Report";
-
-    [Inject] private IJSRuntime JsRuntime { get; set; } = default!;
 
     private readonly Dictionary<int, TItem> _groupAggregates = new();
     private TItem? _previousRow;
@@ -273,61 +267,5 @@
                     break;
             }
         }
-    }
-
-    public async Task ExportToXlsx()
-    {
-        if (Items == null)
-            throw new Exception("No data to export.");
-        var records = Items.ToList();
-        var wb = new XSSFWorkbook();
-
-        var sht = wb.CreateSheet();
-        var row = sht.CreateRow(0);
-
-        var properties = typeof(TItem).GetProperties().ToList();
-
-        foreach (var property in properties)
-            row.CreateCell(properties.IndexOf(property)).SetCellValue(property.Name);
-
-        foreach (var record in records)
-        {
-            var rowIndex = records.IndexOf(record) + 1;
-            row = sht.CreateRow(rowIndex);
-            foreach (var property in properties)
-            {
-                var colIndex = properties.IndexOf(property);
-                var typeCode = Type.GetTypeCode(property.PropertyType);
-                var value = property.GetValue(record);
-                switch (typeCode)
-                {
-                    case TypeCode.Int16:
-                    case TypeCode.Int32:
-                    case TypeCode.Int64:
-                    case TypeCode.UInt16:
-                    case TypeCode.UInt32:
-                    case TypeCode.UInt64:
-                    case TypeCode.Byte:
-                        if (value != null && !string.IsNullOrEmpty($"{value}"))
-                            row.CreateCell(colIndex, CellType.Numeric).SetCellValue(Convert.ToInt64(value));
-                        break;
-                    case TypeCode.Single:
-                    case TypeCode.Decimal:
-                    case TypeCode.Double:
-                        if (value != null && !string.IsNullOrEmpty($"{value}"))
-                            row.CreateCell(colIndex, CellType.Numeric).SetCellValue(Convert.ToDouble(value));
-                        break;
-                    default:
-                        row.CreateCell(colIndex, CellType.String).SetCellValue($"{value}");
-                        break;
-                }
-            }
-        }
-
-        var exportData = new MemoryStream();
-        wb.Write(exportData, true);
-        exportData.Position = 0;
-        using var streamRef = new DotNetStreamReference(stream: exportData);
-        await JsRuntime.InvokeVoidAsync("downloadFileFromStream", $"{ReportName}.xlsx", streamRef);
     }
 }
