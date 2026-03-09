@@ -1,31 +1,61 @@
 @typeparam TItem
+@using System.Reflection
+@using System.IO
+@using Microsoft.JSInterop
+@using NPOI.SS.UserModel
+@using NPOI.XSSF.UserModel
 
-<div class="report-table">
+<div class="table-responsive" id="report-content">
     <table class="@TableClass">
-        @if (HeaderTemplate is not null)
+        @if (ReportHeader is not null)
         {
             <thead>
-                @HeaderTemplate
+                @ReportHeader
             </thead>
         }
         <tbody>
             @if (Items is not null && Items.Any())
             {
-                @foreach (var item in Items)
+                @foreach (var record in GetRows())
                 {
-                    @RowTemplate(item)
+                    @if (GroupHeader is not null)
+                    {
+                        @foreach (var level in GetBreakingHeaderLevels())
+                        {
+                            var aggregate = GetAggregate(level);
+                            @GroupHeader(new ReportGroupContext<TItem> { Aggregate = aggregate, Row = record, Level = level, GroupStyle = GetGroupStyle(level) })
+                        }
+                    }
+
+                    @if (DetailRow is not null)
+                    {
+                        @DetailRow(new ReportDetailContext<TItem> { Row = record, GroupStyle = GetGroupStyle(GetMaxLevel() + 1) })
+                    }
+                    else if (RowTemplate is not null)
+                    {
+                        @RowTemplate(record)
+                    }
+
+                    @if (GroupFooter is not null)
+                    {
+                        @foreach (var level in GetBreakingFooterLevels())
+                        {
+                            var aggregate = GetAggregate(level);
+                            @GroupFooter(new ReportGroupContext<TItem> { Aggregate = aggregate, Row = record, Level = level, GroupStyle = GetGroupStyle(level) })
+                        }
+                    }
                 }
             }
             else
             {
-                @if (EmptyTemplate is not null)
+                if (EmptyTemplate is not null)
                 {
                     @EmptyTemplate
                 }
                 else
                 {
-                    <tr>
-                        <td colspan="100">No records found.</td>
+                    <tr class="table-warning">
+                        <td colspan="100">No Records</td>
                     </tr>
                 }
             }
@@ -34,9 +64,270 @@
 </div>
 
 @code {
-    [Parameter] public IEnumerable<TItem>? Items { get; set; }
-    [Parameter] public RenderFragment? HeaderTemplate { get; set; }
-    [Parameter, EditorRequired] public RenderFragment<TItem> RowTemplate { get; set; } = default!;
+    [Parameter, EditorRequired] public IEnumerable<TItem>? Items { get; set; }
+    [Parameter] public string TableClass { get; set; } = "table table-sm table-striped table-bordered w-auto";
+    [Parameter] public RenderFragment? ReportHeader { get; set; }
+    [Parameter] public RenderFragment<ReportDetailContext<TItem>>? DetailRow { get; set; }
+    [Parameter] public RenderFragment<TItem>? RowTemplate { get; set; }
+    [Parameter] public RenderFragment<ReportGroupContext<TItem>>? GroupHeader { get; set; }
+    [Parameter] public RenderFragment<ReportGroupContext<TItem>>? GroupFooter { get; set; }
     [Parameter] public RenderFragment? EmptyTemplate { get; set; }
-    [Parameter] public string TableClass { get; set; } = "rz-grid-table";
+    [Parameter] public Action<TItem, TItem>? GroupAggregate { get; set; }
+    [Parameter] public Action<TItem>? GroupReset { get; set; }
+    [Parameter] public Dictionary<int, Func<TItem, TItem, bool>>? GroupBreaks { get; set; }
+    [Parameter] public string ReportName { get; set; } = "Report";
+
+    [Inject] private IJSRuntime JsRuntime { get; set; } = default!;
+
+    private readonly Dictionary<int, TItem> _groupAggregates = new();
+    private TItem? _previousRow;
+    private TItem? _currentRow;
+    private TItem? _nextRow;
+
+    public bool IsFirstRow => _previousRow == null;
+    public bool IsLastRow => _nextRow == null;
+
+    private IEnumerable<int> GetBreakingHeaderLevels()
+    {
+        if (GroupBreaks == null) yield break;
+        foreach (var level in GroupBreaks.Keys.Where(k => k > 0).OrderBy(k => k))
+        {
+            if (IsBreakHeader(level))
+                yield return level;
+        }
+    }
+
+    private IEnumerable<int> GetBreakingFooterLevels()
+    {
+        if (GroupBreaks == null) yield break;
+        foreach (var level in GroupBreaks.Keys.OrderByDescending(k => k))
+        {
+            if (IsBreakFooter(level))
+                yield return level;
+        }
+    }
+
+    private int GetMaxLevel()
+    {
+        if (GroupBreaks == null || !GroupBreaks.Any()) return 0;
+        return GroupBreaks.Keys.Max();
+    }
+
+    public bool IsBreakHeader(int level)
+    {
+        if (IsFirstRow) return true;
+        if (GroupBreaks == null) return false;
+        foreach (var groupBreak in GroupBreaks.Where(x => x.Key <= level && x.Key > 0))
+        {
+            if (_previousRow != null && _currentRow != null && groupBreak.Value(_previousRow, _currentRow))
+                return true;
+        }
+        return false;
+    }
+
+    public bool IsBreakFooter(int level)
+    {
+        if (IsLastRow) return true;
+        if (GroupBreaks == null) return false;
+        foreach (var groupBreak in GroupBreaks.Where(x => x.Key <= level))
+        {
+            if (_currentRow != null && _nextRow != null && groupBreak.Value(_currentRow, _nextRow))
+                return true;
+        }
+        return false;
+    }
+
+    public TItem GetAggregate(int level)
+    {
+        if (_groupAggregates.ContainsKey(level))
+            return _groupAggregates[level];
+        ResetGroup(level);
+        return _groupAggregates[level];
+    }
+
+    public string GetGroupStyle(int level)
+    {
+        var indentLevel = Math.Max(level - 1, 0);
+        return $"padding-left: {indentLevel * 30}px;";
+    }
+
+    private IEnumerable<TItem> GetRows()
+    {
+        _groupAggregates.Clear();
+        if (Items == null) yield break;
+        foreach (var record in Items)
+        {
+            ShiftRows(record);
+            if (_currentRow != null)
+            {
+                AggregateGroups();
+                yield return _currentRow;
+                CheckResetGroups();
+            }
+        }
+        ShiftRows(default);
+        if (_currentRow != null)
+        {
+            AggregateGroups();
+            yield return _currentRow;
+            CheckResetGroups();
+        }
+    }
+
+    private void ShiftRows(TItem? row)
+    {
+        _previousRow = _currentRow;
+        _currentRow = _nextRow;
+        _nextRow = row;
+    }
+
+    private void AggregateGroups()
+    {
+        if (_currentRow == null) return;
+        if (GroupBreaks != null)
+        {
+            foreach (var groupBreak in GroupBreaks)
+            {
+                AggregateGroup(groupBreak.Key);
+            }
+        }
+    }
+
+    private void AggregateGroup(int level)
+    {
+        if (!_groupAggregates.ContainsKey(level) || _groupAggregates[level] == null)
+            ResetGroup(level);
+        if (_currentRow == null) return;
+        if (GroupAggregate != null)
+        {
+            GroupAggregate.Invoke(_groupAggregates[level], _currentRow);
+        }
+        else
+        {
+            DefaultAggregate(_groupAggregates[level], _currentRow);
+        }
+    }
+
+    private void CheckResetGroups()
+    {
+        if (GroupBreaks == null) return;
+        foreach (var groupBreak in GroupBreaks)
+        {
+            if (IsBreakFooter(groupBreak.Key))
+                ResetGroup(groupBreak.Key);
+        }
+    }
+
+    private void ResetGroup(int level)
+    {
+        var instance = Activator.CreateInstance<TItem>();
+        if (instance == null) return;
+        GroupReset?.Invoke(instance);
+        if (_groupAggregates.ContainsKey(level))
+            _groupAggregates[level] = instance;
+        else
+            _groupAggregates.Add(level, instance);
+    }
+
+    private void DefaultAggregate(TItem aggregate, TItem detail)
+    {
+        var properties = typeof(TItem).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanRead && p.CanWrite);
+        foreach (var property in properties)
+        {
+            var detailValue = property.GetValue(detail);
+            var underlyingType = Nullable.GetUnderlyingType(property.PropertyType);
+            var targetType = underlyingType ?? property.PropertyType;
+            var typeCode = Type.GetTypeCode(targetType);
+
+            switch (typeCode)
+            {
+                case TypeCode.Int16:
+                case TypeCode.Int32:
+                case TypeCode.Int64:
+                case TypeCode.UInt16:
+                case TypeCode.UInt32:
+                case TypeCode.UInt64:
+                case TypeCode.Byte:
+                case TypeCode.SByte:
+                    var currentIntValue = property.GetValue(aggregate);
+                    var intSum = Convert.ToInt64(currentIntValue ?? 0) + Convert.ToInt64(detailValue ?? 0);
+                    var intResult = Convert.ChangeType(intSum, targetType);
+                    property.SetValue(aggregate, intResult);
+                    break;
+                case TypeCode.Single:
+                case TypeCode.Double:
+                    var currentDoubleValue = property.GetValue(aggregate);
+                    var doubleSum = Convert.ToDouble(currentDoubleValue ?? 0) + Convert.ToDouble(detailValue ?? 0);
+                    var doubleResult = Convert.ChangeType(doubleSum, targetType);
+                    property.SetValue(aggregate, doubleResult);
+                    break;
+                case TypeCode.Decimal:
+                    var currentDecimalValue = property.GetValue(aggregate);
+                    var decimalSum = Convert.ToDecimal(currentDecimalValue ?? 0) + Convert.ToDecimal(detailValue ?? 0);
+                    property.SetValue(aggregate, decimalSum);
+                    break;
+                default:
+                    if (detailValue != null)
+                        property.SetValue(aggregate, detailValue);
+                    break;
+            }
+        }
+    }
+
+    public async Task ExportToXlsx()
+    {
+        if (Items == null)
+            throw new Exception("No data to export.");
+        var records = Items.ToList();
+        var wb = new XSSFWorkbook();
+
+        var sht = wb.CreateSheet();
+        var row = sht.CreateRow(0);
+
+        var properties = typeof(TItem).GetProperties().ToList();
+
+        foreach (var property in properties)
+            row.CreateCell(properties.IndexOf(property)).SetCellValue(property.Name);
+
+        foreach (var record in records)
+        {
+            var rowIndex = records.IndexOf(record) + 1;
+            row = sht.CreateRow(rowIndex);
+            foreach (var property in properties)
+            {
+                var colIndex = properties.IndexOf(property);
+                var typeCode = Type.GetTypeCode(property.PropertyType);
+                var value = property.GetValue(record);
+                switch (typeCode)
+                {
+                    case TypeCode.Int16:
+                    case TypeCode.Int32:
+                    case TypeCode.Int64:
+                    case TypeCode.UInt16:
+                    case TypeCode.UInt32:
+                    case TypeCode.UInt64:
+                    case TypeCode.Byte:
+                        if (value != null && !string.IsNullOrEmpty($"{value}"))
+                            row.CreateCell(colIndex, CellType.Numeric).SetCellValue(Convert.ToInt64(value));
+                        break;
+                    case TypeCode.Single:
+                    case TypeCode.Decimal:
+                    case TypeCode.Double:
+                        if (value != null && !string.IsNullOrEmpty($"{value}"))
+                            row.CreateCell(colIndex, CellType.Numeric).SetCellValue(Convert.ToDouble(value));
+                        break;
+                    default:
+                        row.CreateCell(colIndex, CellType.String).SetCellValue($"{value}");
+                        break;
+                }
+            }
+        }
+
+        var exportData = new MemoryStream();
+        wb.Write(exportData, true);
+        exportData.Position = 0;
+        using var streamRef = new DotNetStreamReference(stream: exportData);
+        await JsRuntime.InvokeVoidAsync("downloadFileFromStream", $"{ReportName}.xlsx", streamRef);
+    }
 }
