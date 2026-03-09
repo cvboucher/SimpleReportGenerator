@@ -1,0 +1,42 @@
+@typeparam TItem
+
+<div class="report-table">
+    <table class="@TableClass">
+        @if (HeaderTemplate is not null)
+        {
+            <thead>
+                @HeaderTemplate
+            </thead>
+        }
+        <tbody>
+            @if (Items is not null && Items.Any())
+            {
+                @foreach (var item in Items)
+                {
+                    @RowTemplate(item)
+                }
+            }
+            else
+            {
+                @if (EmptyTemplate is not null)
+                {
+                    @EmptyTemplate
+                }
+                else
+                {
+                    <tr>
+                        <td colspan="100">No records found.</td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public IEnumerable<TItem>? Items { get; set; }
+    [Parameter] public RenderFragment? HeaderTemplate { get; set; }
+    [Parameter, EditorRequired] public RenderFragment<TItem> RowTemplate { get; set; } = default!;
+    [Parameter] public RenderFragment? EmptyTemplate { get; set; }
+    [Parameter] public string TableClass { get; set; } = "rz-grid-table";
+}
