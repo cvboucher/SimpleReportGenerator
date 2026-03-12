@@ -2,15 +2,15 @@
 @using System.Reflection
 
 <div class="table-responsive" id="report-content">
-    <table class="@TableClass">
-        @if (ReportHeader is not null)
+    <table class="@ResolvedTableClass">
+        @if (ResolvedReportHeader is not null)
         {
             <thead>
-                @ReportHeader
+                @ResolvedReportHeader
             </thead>
         }
         <tbody>
-            @if (Items is not null && Items.Any())
+            @if (ResolvedItems is not null && ResolvedItems.Any())
             {
                 @foreach (var record in GetRows())
                 {
@@ -44,9 +44,9 @@
             }
             else
             {
-                if (EmptyTemplate is not null)
+                if (ResolvedEmptyTemplate is not null)
                 {
-                    @EmptyTemplate
+                    @ResolvedEmptyTemplate
                 }
                 else
                 {
@@ -61,17 +61,26 @@
 
 @code {
     [Parameter, EditorRequired] public IEnumerable<TItem>? Items { get; set; }
+    [Parameter] public IEnumerable<TItem>? Data { get; set; }
     [Parameter] public string TableClass { get; set; } = "table table-sm table-striped table-bordered w-auto";
+    [Parameter] public string? TableCssClass { get; set; }
     [Parameter] public RenderFragment? ReportHeader { get; set; }
+    [Parameter] public RenderFragment? TableHeader { get; set; }
     [Parameter] public RenderFragment<ReportDetailContext<TItem>>? DetailRow { get; set; }
     [Parameter] public RenderFragment<TItem>? RowTemplate { get; set; }
     [Parameter] public RenderFragment<ReportGroupContext<TItem>>? GroupHeader { get; set; }
     [Parameter] public RenderFragment<ReportGroupContext<TItem>>? GroupFooter { get; set; }
     [Parameter] public RenderFragment? EmptyTemplate { get; set; }
+    [Parameter] public RenderFragment? NoRecordsTemplate { get; set; }
     [Parameter] public Action<TItem, TItem>? GroupAggregate { get; set; }
     [Parameter] public Action<TItem>? GroupReset { get; set; }
     [Parameter] public Dictionary<int, Func<TItem, TItem, bool>>? GroupBreaks { get; set; }
     [Parameter] public string ReportName { get; set; } = "Report";
+
+    private IEnumerable<TItem>? ResolvedItems => Data ?? Items;
+    private string ResolvedTableClass => !string.IsNullOrWhiteSpace(TableCssClass) ? TableCssClass! : TableClass;
+    private RenderFragment? ResolvedReportHeader => ReportHeader ?? TableHeader;
+    private RenderFragment? ResolvedEmptyTemplate => EmptyTemplate ?? NoRecordsTemplate;
 
     private readonly Dictionary<int, TItem> _groupAggregates = new();
     private TItem? _previousRow;
@@ -148,8 +157,8 @@
     private IEnumerable<TItem> GetRows()
     {
         _groupAggregates.Clear();
-        if (Items == null) yield break;
-        foreach (var record in Items)
+        if (ResolvedItems == null) yield break;
+        foreach (var record in ResolvedItems)
         {
             ShiftRows(record);
             if (_currentRow != null)
@@ -225,6 +234,7 @@
 
     private void DefaultAggregate(TItem aggregate, TItem detail)
     {
+        if (aggregate == null || detail == null) return;
         var properties = typeof(TItem).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.CanWrite);
         foreach (var property in properties)
