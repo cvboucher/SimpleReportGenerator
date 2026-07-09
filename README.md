@@ -142,8 +142,8 @@ Level 0 Footer (context.Level == 0, Grand Totals)
 | `GroupFooter` | `RenderFragment<ReportGroupContext<TItem>>?` | `null` | Single template for all group footers |
 | `NoRecordsTemplate` | `RenderFragment?` | `null` | Template displayed when there are no records (alias: `EmptyTemplate`) |
 | `EmptyTemplate` | `RenderFragment?` | `null` | Alternate name for `NoRecordsTemplate` |
-| `GroupAggregate` | `Action<TItem, TItem>?` | `null` | Custom aggregation function |
-| `GroupReset` | `Action<TItem>?` | `null` | Custom reset function for aggregates |
+| `GroupAggregate` | `Action<int, TItem, TItem>?` | `null` | Custom aggregation function with `level`, `aggregate`, and `detail` |
+| `GroupReset` | `Action<int, TItem>?` | `null` | Custom reset function with `level` and aggregate instance |
 | `GroupBreaks` | `Dictionary<int, Func<TItem, TItem, bool>>?` | `null` | Functions that determine when groups break |
 | `ReportName` | `string` | `"Report"` | Used by exporters (if any) |
 
@@ -212,7 +212,7 @@ When no `GroupAggregate` function is provided, the component uses default aggreg
 
 ### Custom Aggregation
 
-Provide a custom `GroupAggregate` function for more control:
+Provide a custom `GroupAggregate` function for more control. The `level` is passed in so one function can handle all group levels:
 
 ```razor
 <ReportGenerator TItem="SalesData" 
@@ -223,19 +223,20 @@ Provide a custom `GroupAggregate` function for more control:
 </ReportGenerator>
 
 @code {
-    private void AggregateData(SalesData aggregate, SalesData detail)
+    private void AggregateData(int level, SalesData aggregate, SalesData detail)
     {
         aggregate.TotalAmount += detail.Amount;
         aggregate.ItemCount++;
         aggregate.AverageAmount = aggregate.TotalAmount / aggregate.ItemCount;
-        aggregate.Region = detail.Region; // Copy grouping field
+        aggregate.Region = level == 0 ? "All Regions" : detail.Region;
     }
 
-    private void ResetAggregate(SalesData aggregate)
+    private void ResetAggregate(int level, SalesData aggregate)
     {
         aggregate.TotalAmount = 0;
         aggregate.ItemCount = 0;
         aggregate.AverageAmount = 0;
+        aggregate.Region = level == 0 ? "All Regions" : string.Empty;
     }
 }
 ```
@@ -260,6 +261,7 @@ private Dictionary<int, Func<MyData, MyData, bool>> groupBreaks = new()
 
 **Important:**
 - Level 0 always triggers a footer on the last row (grand totals)
+- `GroupAggregate` and `GroupReset` receive the current level so one delegate can handle all groups
 - Headers at a level trigger when any break at that level or lower occurs
 - Footers at a level trigger when any break at that level or lower occurs
 

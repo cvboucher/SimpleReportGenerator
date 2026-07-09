@@ -72,8 +72,8 @@
     [Parameter] public RenderFragment<ReportGroupContext<TItem>>? GroupFooter { get; set; }
     [Parameter] public RenderFragment? EmptyTemplate { get; set; }
     [Parameter] public RenderFragment? NoRecordsTemplate { get; set; }
-    [Parameter] public Action<TItem, TItem>? GroupAggregate { get; set; }
-    [Parameter] public Action<TItem>? GroupReset { get; set; }
+    [Parameter] public Action<int, TItem, TItem>? GroupAggregate { get; set; }
+    [Parameter] public Action<int, TItem>? GroupReset { get; set; }
     [Parameter] public Dictionary<int, Func<TItem, TItem, bool>>? GroupBreaks { get; set; }
     [Parameter] public string ReportName { get; set; } = "Report";
 
@@ -203,7 +203,7 @@
         if (_currentRow == null) return;
         if (GroupAggregate != null)
         {
-            GroupAggregate.Invoke(_groupAggregates[level], _currentRow);
+            GroupAggregate.Invoke(level, _groupAggregates[level], _currentRow);
         }
         else
         {
@@ -225,7 +225,7 @@
     {
         var instance = Activator.CreateInstance<TItem>();
         if (instance == null) return;
-        GroupReset?.Invoke(instance);
+        GroupReset?.Invoke(level, instance);
         if (_groupAggregates.ContainsKey(level))
             _groupAggregates[level] = instance;
         else
@@ -255,8 +255,8 @@
                 case TypeCode.Byte:
                 case TypeCode.SByte:
                     var currentIntValue = property.GetValue(aggregate);
-                    var intSum = Convert.ToInt64(currentIntValue ?? 0) + Convert.ToInt64(detailValue ?? 0);
-                    var intResult = Convert.ChangeType(intSum, targetType);
+                    var intSum = Convert.ToDecimal(currentIntValue ?? 0) + Convert.ToDecimal(detailValue ?? 0);
+                    var intResult = Convert.ChangeType(ClampIntegralSum(intSum, targetType), targetType);
                     property.SetValue(aggregate, intResult);
                     break;
                 case TypeCode.Single:
@@ -277,5 +277,21 @@
                     break;
             }
         }
+    }
+
+    private static decimal ClampIntegralSum(decimal value, Type targetType)
+    {
+        return Type.GetTypeCode(targetType) switch
+        {
+            TypeCode.SByte => Math.Clamp(value, sbyte.MinValue, sbyte.MaxValue),
+            TypeCode.Byte => Math.Clamp(value, byte.MinValue, byte.MaxValue),
+            TypeCode.Int16 => Math.Clamp(value, short.MinValue, short.MaxValue),
+            TypeCode.UInt16 => Math.Clamp(value, ushort.MinValue, ushort.MaxValue),
+            TypeCode.Int32 => Math.Clamp(value, int.MinValue, int.MaxValue),
+            TypeCode.UInt32 => Math.Clamp(value, uint.MinValue, uint.MaxValue),
+            TypeCode.Int64 => Math.Clamp(value, long.MinValue, long.MaxValue),
+            TypeCode.UInt64 => Math.Clamp(value, ulong.MinValue, ulong.MaxValue),
+            _ => value
+        };
     }
 }
